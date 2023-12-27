@@ -27,6 +27,7 @@ type _Outbound struct {
 	Hysteria2Options    Hysteria2OutboundOptions    `json:"-"`
 	SelectorOptions     SelectorOutboundOptions     `json:"-"`
 	URLTestOptions      URLTestOutboundOptions      `json:"-"`
+	LoadBalanceOptions  LoadBalanceOutboundOptions  `json:"-"`
 }
 
 type Outbound _Outbound
@@ -70,6 +71,8 @@ func (h *Outbound) RawOptions() (any, error) {
 		rawOptionsPtr = &h.SelectorOptions
 	case C.TypeURLTest:
 		rawOptionsPtr = &h.URLTestOptions
+	case C.TypeLoadBalance:
+		rawOptionsPtr = &h.LoadBalanceOptions
 	case "":
 		return nil, E.New("missing outbound type")
 	default:

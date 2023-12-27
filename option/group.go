@@ -14,3 +14,8 @@ type URLTestOutboundOptions struct {
 	IdleTimeout               Duration `json:"idle_timeout,omitempty"`
 	InterruptExistConnections bool     `json:"interrupt_exist_connections,omitempty"`
 }
+
+type LoadBalanceOutboundOptions struct {
+	Outbounds []string `json:"outbounds"`
+	Weights   []int64  `json:"weights,omitempty"`
+}
