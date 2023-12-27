@@ -283,7 +283,9 @@ func (g *URLTestGroup) Select(network string) adapter.Outbound {
 		if history == nil {
 			continue
 		}
-		if minDelay == 0 || minDelay > history.Delay+g.tolerance || minDelay > history.Delay-g.tolerance && minTime.Before(history.Time) {
+		if minDelay == 0 ||
+			((minDelay > history.Delay+g.tolerance || minDelay > history.Delay-g.tolerance) &&
+				minTime.Before(history.Time)) {
 			minDelay = history.Delay
 			minTime = history.Time
 			minOutbound = detour
