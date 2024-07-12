@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sagernet/sing/common/auth"
 	F "github.com/sagernet/sing/common/format"
 
 	"github.com/logrusorgru/aurora"
@@ -62,10 +63,12 @@ func (f Formatter) Format(ctx context.Context, level Level, tag string, message 
 	}
 
 	var parentID, id ID
-	var hasParentID, hasID bool
+	var userIdx int
+	var hasParentID, hasID, hasUserIdx bool
 	if ctx != nil {
 		parentID, hasParentID = ParentIDFromContext(ctx)
 		id, hasID = IDFromContext(ctx)
+		userIdx, hasUserIdx = auth.UserFromContext[int](ctx)
 	}
 
 	if hasID {
@@ -81,10 +84,14 @@ func (f Formatter) Format(ctx context.Context, level Level, tag string, message 
 	if hasParentID {
 		if !f.DisableColors {
 			color := paint(parentID)
-			message = F.ToString("[", aurora.Colorize(parentID.ID, color).String(), "] ", message)
+			message = F.ToString("[parent=", aurora.Colorize(parentID.ID, color).String(), "] ", message)
 		} else {
-			message = F.ToString("[", parentID.ID, "] ", message)
+			message = F.ToString("[parent=", parentID.ID, "] ", message)
 		}
+	}
+
+	if hasUserIdx {
+		message = F.ToString("[user=", userIdx, "] ", message)
 	}
 
 	switch {
