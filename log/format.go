@@ -19,6 +19,8 @@ type Formatter struct {
 	FullTimestamp    bool
 	TimestampFormat  string
 	DisableLineBreak bool
+	UserIdx          bool
+	ParentID         bool
 }
 
 func paint(id ID) aurora.Color {
@@ -81,7 +83,7 @@ func (f Formatter) Format(ctx context.Context, level Level, tag string, message 
 		}
 	}
 
-	if hasParentID {
+	if f.ParentID && hasParentID {
 		if !f.DisableColors {
 			color := paint(parentID)
 			message = F.ToString("[parent=", aurora.Colorize(parentID.ID, color).String(), "] ", message)
@@ -90,7 +92,7 @@ func (f Formatter) Format(ctx context.Context, level Level, tag string, message 
 		}
 	}
 
-	if hasUserIdx {
+	if f.UserIdx && hasUserIdx {
 		message = F.ToString("[user=", userIdx, "] ", message)
 	}
 

@@ -36,5 +36,7 @@ type LogOptions struct {
 	Level        string `json:"level,omitempty"`
 	Output       string `json:"output,omitempty"`
 	Timestamp    bool   `json:"timestamp,omitempty"`
+	ParentID     bool   `json:"parent_id,omitempty"`
+	UserIdx      bool   `json:"user_idx,omitempty"`
 	DisableColor bool   `json:"-"`
 }

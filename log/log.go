@@ -48,6 +48,8 @@ func New(options Options) (Factory, error) {
 		DisableTimestamp: !logOptions.Timestamp && logFilePath != "",
 		FullTimestamp:    logOptions.Timestamp,
 		TimestampFormat:  "-0700 2006-01-02 15:04:05",
+		ParentID:         logOptions.ParentID,
+		UserIdx:          logOptions.UserIdx,
 	}
 	factory := NewDefaultFactory(
 		options.Context,
