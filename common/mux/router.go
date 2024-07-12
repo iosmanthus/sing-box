@@ -6,7 +6,6 @@ import (
 
 	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
-	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-mux"
 	E "github.com/sagernet/sing/common/exceptions"
@@ -39,7 +38,7 @@ func NewRouterWithOptions(router adapter.ConnectionRouter, logger logger.Context
 	}
 	service, err := mux.NewService(mux.ServiceOptions{
 		NewStreamContext: func(ctx context.Context, conn net.Conn) context.Context {
-			return log.ContextWithNewID(ctx)
+			return ctx
 		},
 		Logger:  logger,
 		Handler: adapter.NewRouteContextHandler(router, logger),
