@@ -14,6 +14,8 @@ func init() {
 
 type idKey struct{}
 
+type parentIDKey struct{}
+
 type ID struct {
 	ID        uint32
 	CreatedAt time.Time
@@ -29,4 +31,13 @@ func ContextWithNewID(ctx context.Context) context.Context {
 func IDFromContext(ctx context.Context) (ID, bool) {
 	id, loaded := ctx.Value((*idKey)(nil)).(ID)
 	return id, loaded
+}
+
+func ContextWithParentID(ctx context.Context, parent ID) context.Context {
+	return context.WithValue(ctx, (*parentIDKey)(nil), parent)
+}
+
+func ParentIDFromContext(ctx context.Context) (ID, bool) {
+	parent, loaded := ctx.Value((*parentIDKey)(nil)).(ID)
+	return parent, loaded
 }

@@ -20,6 +20,29 @@ type Formatter struct {
 	DisableLineBreak bool
 }
 
+func paint(id ID) aurora.Color {
+	var color aurora.Color
+	color = aurora.Color(uint8(id.ID))
+	color %= 215
+	row := uint(color / 36)
+	column := uint(color % 36)
+
+	var r, g, b float32
+	r = float32(row * 51)
+	g = float32(column / 6 * 51)
+	b = float32((column % 6) * 51)
+	luma := 0.2126*r + 0.7152*g + 0.0722*b
+	if luma < 60 {
+		row = 5 - row
+		column = 35 - column
+		color = aurora.Color(row*36 + column)
+	}
+	color += 16
+	color = color << 16
+	color |= 1 << 14
+	return color
+}
+
 func (f Formatter) Format(ctx context.Context, level Level, tag string, message string, timestamp time.Time) string {
 	levelString := strings.ToUpper(FormatLevel(level))
 	if !f.DisableColors {
@@ -37,38 +60,33 @@ func (f Formatter) Format(ctx context.Context, level Level, tag string, message 
 	if tag != "" {
 		message = tag + ": " + message
 	}
-	var id ID
-	var hasId bool
+
+	var parentID, id ID
+	var hasParentID, hasID bool
 	if ctx != nil {
-		id, hasId = IDFromContext(ctx)
+		parentID, hasParentID = ParentIDFromContext(ctx)
+		id, hasID = IDFromContext(ctx)
 	}
-	if hasId {
+
+	if hasID {
 		activeDuration := FormatDuration(time.Since(id.CreatedAt))
 		if !f.DisableColors {
-			var color aurora.Color
-			color = aurora.Color(uint8(id.ID))
-			color %= 215
-			row := uint(color / 36)
-			column := uint(color % 36)
-
-			var r, g, b float32
-			r = float32(row * 51)
-			g = float32(column / 6 * 51)
-			b = float32((column % 6) * 51)
-			luma := 0.2126*r + 0.7152*g + 0.0722*b
-			if luma < 60 {
-				row = 5 - row
-				column = 35 - column
-				color = aurora.Color(row*36 + column)
-			}
-			color += 16
-			color = color << 16
-			color |= 1 << 14
+			color := paint(id)
 			message = F.ToString("[", aurora.Colorize(id.ID, color).String(), " ", activeDuration, "] ", message)
 		} else {
 			message = F.ToString("[", id.ID, " ", activeDuration, "] ", message)
 		}
 	}
+
+	if hasParentID {
+		if !f.DisableColors {
+			color := paint(parentID)
+			message = F.ToString("[", aurora.Colorize(parentID.ID, color).String(), "] ", message)
+		} else {
+			message = F.ToString("[", parentID.ID, "] ", message)
+		}
+	}
+
 	switch {
 	case f.DisableTimestamp:
 		message = levelString + " " + message
