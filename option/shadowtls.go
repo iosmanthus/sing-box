@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 
 	"github.com/sagernet/sing-box/schema"
+	"github.com/sagernet/sing/common/byteformats"
 	E "github.com/sagernet/sing/common/exceptions"
 	"github.com/sagernet/sing/common/json/badjson"
 )
@@ -17,6 +18,14 @@ type ShadowTLSInboundOptions struct {
 	HandshakeForServerName *badjson.TypedMap[string, ShadowTLSHandshakeOptions] `json:"handshake_for_server_name,omitempty"`
 	StrictMode             bool                                                 `json:"strict_mode,omitempty"`
 	WildcardSNI            WildcardSNI                                          `json:"wildcard_sni,omitempty"`
+	V3FlowControl          *ShadowTLSV3FlowControlOptions                       `json:"v3_flow_control,omitempty"`
+}
+
+type ShadowTLSV3FlowControlOptions struct {
+	Up       *byteformats.NetworkBytesCompat `json:"up,omitempty"`
+	UpMbps   int                             `json:"up_mbps,omitempty"`
+	Down     *byteformats.NetworkBytesCompat `json:"down,omitempty"`
+	DownMbps int                             `json:"down_mbps,omitempty"`
 }
 
 type WildcardSNI int

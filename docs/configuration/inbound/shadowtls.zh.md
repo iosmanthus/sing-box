@@ -38,7 +38,11 @@ icon: material/new-box
     }
   },
   "strict_mode": false,
-  "wildcard_sni": ""
+  "wildcard_sni": "",
+  "v3_flow_control": {
+    "up": "20Mbps",
+    "down": "100Mbps"
+  }
 }
 ```
 
@@ -103,5 +107,22 @@ ShadowTLS 通配符 SNI 模式。
 * `all`：所有连接的目标将被重写为 `(servername):443`。
 
 此外，匹配 `handshake_for_server_name` 的连接不受影响。
+
+仅在 ShadowTLS 协议 3 中可用。
+
+#### v3_flow_control
+
+ShadowTLS v3 在 ClientHello 验证失败后的回退转发路径流控。
+
+该流控用于限制未认证连接被中继时的带宽占用，防止滥用 ShadowTLS 服务器自身带宽。
+
+可用字段：
+
+* `up`: 客户端到服务端的上行限速（`NetworkBytesCompat`，例如 `20Mbps` 或 `2MBps`）。
+* `down`: 服务端到客户端的下行限速（`NetworkBytesCompat`，例如 `100Mbps` 或 `10MBps`）。
+* `up_mbps`: 上行 Mbps 限速（当未设置 `up` 时生效）。
+* `down_mbps`: 下行 Mbps 限速（当未设置 `down` 时生效）。
+
+该流控不会影响已认证的 ShadowTLS v3 转发连接。
 
 仅在 ShadowTLS 协议 3 中可用。
