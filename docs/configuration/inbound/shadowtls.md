@@ -38,7 +38,11 @@ icon: material/new-box
     }
   },
   "strict_mode": false,
-  "wildcard_sni": ""
+  "wildcard_sni": "",
+  "v3_flow_control": {
+    "up": "20Mbps",
+    "down": "100Mbps"
+  }
 }
 ```
 
@@ -103,5 +107,22 @@ Available values are:
 * `all`: All connections will have their destination overwritten to `(servername):443`
 
 Additionally, connections matching `handshake_for_server_name` are not affected.
+
+Only available in the ShadowTLS protocol 3.
+
+#### v3_flow_control
+
+Flow control for ShadowTLS v3 fallback path after ClientHello verification failure.
+
+This is designed to prevent unauthenticated relays from consuming the ShadowTLS server's own bandwidth.
+
+Available fields:
+
+* `up`: Upload limit from client to server (`NetworkBytesCompat`, such as `20Mbps` or `2MBps`).
+* `down`: Download limit from server to client (`NetworkBytesCompat`, such as `100Mbps` or `10MBps`).
+* `up_mbps`: Upload limit in Mbps (used when `up` is not set).
+* `down_mbps`: Download limit in Mbps (used when `down` is not set).
+
+This does not affect authenticated ShadowTLS v3 forwarding.
 
 Only available in the ShadowTLS protocol 3.

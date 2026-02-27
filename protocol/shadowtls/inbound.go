@@ -11,7 +11,7 @@ import (
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
-	"github.com/sagernet/sing-shadowtls"
+	shadowtls "github.com/sagernet/sing-shadowtls"
 	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/auth"
 	E "github.com/sagernet/sing/common/exceptions"
@@ -67,6 +67,19 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 	if err != nil {
 		return nil, err
 	}
+	var flowControl shadowtls.V3FlowControlConfig
+	if options.V3FlowControl != nil {
+		if options.V3FlowControl.Up != nil {
+			flowControl.UpstreamBytesPerSecond = int64(options.V3FlowControl.Up.Value())
+		} else if options.V3FlowControl.UpMbps > 0 {
+			flowControl.UpstreamBytesPerSecond = int64(options.V3FlowControl.UpMbps) * 1000 * 1000 / 8
+		}
+		if options.V3FlowControl.Down != nil {
+			flowControl.DownstreamBytesPerSecond = int64(options.V3FlowControl.Down.Value())
+		} else if options.V3FlowControl.DownMbps > 0 {
+			flowControl.DownstreamBytesPerSecond = int64(options.V3FlowControl.DownMbps) * 1000 * 1000 / 8
+		}
+	}
 	service, err := shadowtls.NewService(shadowtls.ServiceConfig{
 		Version:  options.Version,
 		Password: options.Password,
@@ -80,6 +93,7 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 		HandshakeForServerName: handshakeForServerName,
 		StrictMode:             options.StrictMode,
 		WildcardSNI:            shadowtls.WildcardSNI(options.WildcardSNI),
+		V3FlowControl:          flowControl,
 		Handler:                (*inboundHandler)(inbound),
 		Logger:                 logger,
 	})

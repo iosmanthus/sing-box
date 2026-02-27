@@ -133,3 +133,5 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	lukechampine.com/blake3 v1.3.0 // indirect
 )
+
+replace github.com/sagernet/sing-shadowtls => github.com/iosmanthus/sing-shadowtls v0.0.0-20260227165752-73963c6a0e60
