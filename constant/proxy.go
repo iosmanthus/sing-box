@@ -34,6 +34,7 @@ const (
 	TypeDERP               = "derp"
 	TypeResolved           = "resolved"
 	TypeSSMAPI             = "ssm-api"
+	TypeRemoteUsers        = "remote-users"
 	TypeAPI                = "api"
 	TypeCCM                = "ccm"
 	TypeOCM                = "ocm"
