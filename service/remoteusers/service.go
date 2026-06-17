@@ -79,11 +79,135 @@ func (s *Service) update(ctx context.Context) error {
 	return nil
 }
 
-// Ensure the package imports are all used until Task 6 fills in the rest.
-var (
-	_ = adapter.StartStateStart
-	_ = boxService.NewAdapter
-	_ = C.TypeRemoteUsers
-	_ = option.RemoteUsersServiceOptions{}
-	_ = service.FromContext[adapter.InboundManager]
-)
+func RegisterService(registry *boxService.Registry) {
+	boxService.Register[option.RemoteUsersServiceOptions](registry, C.TypeRemoteUsers, NewService)
+}
+
+func NewService(ctx context.Context, logger log.ContextLogger, tag string, options option.RemoteUsersServiceOptions) (adapter.Service, error) {
+	if options.URL == "" {
+		return nil, E.New("missing url")
+	}
+	if options.Servers == nil || options.Servers.Size() == 0 {
+		return nil, E.New("missing servers")
+	}
+	inboundManager := service.FromContext[adapter.InboundManager](ctx)
+	if inboundManager == nil {
+		return nil, E.New("inbound manager not available")
+	}
+	var targets []userUpdater
+	for i, entry := range options.Servers.Entries() {
+		inbound, loaded := inboundManager.Get(entry.Value)
+		if !loaded {
+			return nil, E.New("remote_users server[", i, "]: inbound ", entry.Value, " not found")
+		}
+		managed, isManaged := inbound.(adapter.ManagedSSMServer)
+		if !isManaged {
+			return nil, E.New("remote_users server[", i, "]: inbound/", inbound.Type(), "[", inbound.Tag(), "] is not a managed (SSM) server")
+		}
+		targets = append(targets, managed)
+	}
+	interval := defaultInterval
+	if options.Interval > 0 {
+		interval = time.Duration(options.Interval)
+	}
+	requestTimeout := defaultRequestTimeout
+	if options.RequestTimeout > 0 {
+		requestTimeout = time.Duration(options.RequestTimeout)
+	}
+	serviceCtx, cancel := context.WithCancel(ctx)
+	return &Service{
+		Adapter:        boxService.NewAdapter(C.TypeRemoteUsers, tag),
+		ctx:            serviceCtx,
+		cancel:         cancel,
+		logger:         logger,
+		url:            options.URL,
+		token:          options.Token,
+		interval:       interval,
+		requestTimeout: requestTimeout,
+		cachePath:      options.CachePath,
+		downloadDetour: options.DownloadDetour,
+		targets:        targets,
+	}, nil
+}
+
+func (s *Service) Start(stage adapter.StartStage) error {
+	if stage != adapter.StartStateStart {
+		return nil
+	}
+	transport, err := s.resolveTransport()
+	if err != nil {
+		return E.Cause(err, "create remote_users http client")
+	}
+	s.httpClient = &http.Client{Timeout: s.requestTimeout, Transport: transport}
+
+	// Floor: apply the on-disk last-good cache before the first fetch, so the
+	// node comes up with users even while the SOT is unreachable.
+	if cache, cacheErr := loadCache(s.cachePath); cacheErr != nil {
+		s.logger.Error(E.Cause(cacheErr, "load user cache"))
+	} else if cache != nil && len(cache.Users) > 0 {
+		if applyErr := applyUsers(s.targets, cache.Users); applyErr != nil {
+			s.logger.Error(E.Cause(applyErr, "apply cached users"))
+		} else {
+			s.lastHash = hashUsers(cache.Users)
+			s.lastEtag = cache.Etag
+			s.currentCount = len(cache.Users)
+			s.logger.Info("loaded ", s.currentCount, " users from cache")
+		}
+	}
+
+	// Synchronous initial fetch, but non-fatal: never block startup on the SOT.
+	fetchCtx, cancel := context.WithTimeout(s.ctx, s.requestTimeout)
+	err = s.update(fetchCtx)
+	cancel()
+	if err != nil {
+		s.logger.Error(E.Cause(err, "initial user fetch (continuing with cached/empty set)"))
+	}
+
+	s.ticker = time.NewTicker(s.interval)
+	go s.loopUpdate()
+	return nil
+}
+
+func (s *Service) Close() error {
+	if s.cancel != nil {
+		s.cancel()
+	}
+	if s.ticker != nil {
+		s.ticker.Stop()
+	}
+	return nil
+}
+
+func (s *Service) loopUpdate() {
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-s.ticker.C:
+			fetchCtx, cancel := context.WithTimeout(s.ctx, s.requestTimeout)
+			err := s.update(fetchCtx)
+			cancel()
+			if err != nil {
+				s.logger.Error(E.Cause(err, "update users (keeping previous set)"))
+			}
+		}
+	}
+}
+
+// resolveTransport returns Go's default transport for a direct egress fetch, or
+// a detour-bound transport from the HTTP client manager when download_detour is set.
+func (s *Service) resolveTransport() (http.RoundTripper, error) {
+	if s.downloadDetour == "" {
+		return http.DefaultTransport, nil
+	}
+	httpClientManager := service.FromContext[adapter.HTTPClientManager](s.ctx)
+	if httpClientManager == nil {
+		return nil, E.New("download_detour set but http client manager unavailable")
+	}
+	return httpClientManager.ResolveTransport(s.ctx, s.logger, option.HTTPClientOptions{
+		DialerOptions: option.DialerOptions{
+			Detour: s.downloadDetour,
+		},
+		DisableEmptyDirectCheck: true,
+	})
+}

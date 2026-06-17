@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
 )
 
 // newTestService builds a Service wired to a fake target and a real http client,
@@ -123,5 +124,21 @@ func TestUpdateNoopWhenUnchanged(t *testing.T) {
 	_ = s.update(context.Background())
 	if target.callCount != 1 {
 		t.Fatalf("UpdateUsers called %d times; identical payload must be a no-op", target.callCount)
+	}
+}
+
+func TestNewServiceRejectsMissingURL(t *testing.T) {
+	_, err := NewService(context.Background(), log.StdLogger(), "users", option.RemoteUsersServiceOptions{})
+	if err == nil {
+		t.Fatal("expected error for missing url")
+	}
+}
+
+func TestNewServiceRejectsMissingServers(t *testing.T) {
+	_, err := NewService(context.Background(), log.StdLogger(), "users", option.RemoteUsersServiceOptions{
+		URL: "https://example.invalid/admin/users",
+	})
+	if err == nil {
+		t.Fatal("expected error for missing servers")
 	}
 }
