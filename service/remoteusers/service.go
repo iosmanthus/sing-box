@@ -24,6 +24,7 @@ type Service struct {
 	boxService.Adapter
 	ctx            context.Context
 	cancel         context.CancelFunc
+	done           chan struct{}
 	logger         log.ContextLogger
 	url            string
 	token          string
@@ -33,6 +34,7 @@ type Service struct {
 	downloadDetour string
 	targets        []userUpdater
 	httpClient     *http.Client
+	closeTransport func()
 	ticker         *time.Ticker
 	access         sync.Mutex
 	lastEtag       string
@@ -61,7 +63,9 @@ func (s *Service) update(ctx context.Context) error {
 	}
 	newHash := hashUsers(result.users)
 	if newHash == s.lastHash {
-		s.lastEtag = result.etag
+		if result.etag != "" {
+			s.lastEtag = result.etag
+		}
 		return nil
 	}
 	if len(result.users) > 0 {
@@ -70,7 +74,9 @@ func (s *Service) update(ctx context.Context) error {
 		}
 	}
 	s.lastHash = newHash
-	s.lastEtag = result.etag
+	if result.etag != "" {
+		s.lastEtag = result.etag
+	}
 	s.currentCount = len(result.users)
 	if err = saveCache(s.cachePath, &cachedUsers{Users: result.users, Etag: result.etag, LastUpdated: time.Now()}); err != nil {
 		s.logger.Error(E.Cause(err, "save user cache"))
@@ -134,11 +140,12 @@ func (s *Service) Start(stage adapter.StartStage) error {
 	if stage != adapter.StartStateStart {
 		return nil
 	}
-	transport, err := s.resolveTransport()
+	transport, closeTransport, err := s.resolveTransport()
 	if err != nil {
 		return E.Cause(err, "create remote_users http client")
 	}
 	s.httpClient = &http.Client{Timeout: s.requestTimeout, Transport: transport}
+	s.closeTransport = closeTransport
 
 	// Floor: apply the on-disk last-good cache before the first fetch, so the
 	// node comes up with users even while the SOT is unreachable.
@@ -164,6 +171,7 @@ func (s *Service) Start(stage adapter.StartStage) error {
 	}
 
 	s.ticker = time.NewTicker(s.interval)
+	s.done = make(chan struct{})
 	go s.loopUpdate()
 	return nil
 }
@@ -175,10 +183,18 @@ func (s *Service) Close() error {
 	if s.ticker != nil {
 		s.ticker.Stop()
 	}
+	if s.done != nil {
+		<-s.done
+	}
+	if s.closeTransport != nil {
+		s.closeTransport()
+		s.closeTransport = nil
+	}
 	return nil
 }
 
 func (s *Service) loopUpdate() {
+	defer close(s.done)
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -195,19 +211,26 @@ func (s *Service) loopUpdate() {
 }
 
 // resolveTransport returns Go's default transport for a direct egress fetch, or
-// a detour-bound transport from the HTTP client manager when download_detour is set.
-func (s *Service) resolveTransport() (http.RoundTripper, error) {
+// a detour-bound transport from the HTTP client manager when download_detour is
+// set. The returned cleanup func closes idle connections of a detour-bound
+// transport on shutdown; it is nil for the shared default transport (which must
+// not be closed).
+func (s *Service) resolveTransport() (http.RoundTripper, func(), error) {
 	if s.downloadDetour == "" {
-		return http.DefaultTransport, nil
+		return http.DefaultTransport, nil, nil
 	}
 	httpClientManager := service.FromContext[adapter.HTTPClientManager](s.ctx)
 	if httpClientManager == nil {
-		return nil, E.New("download_detour set but http client manager unavailable")
+		return nil, nil, E.New("download_detour set but http client manager unavailable")
 	}
-	return httpClientManager.ResolveTransport(s.ctx, s.logger, option.HTTPClientOptions{
+	transport, err := httpClientManager.ResolveTransport(s.ctx, s.logger, option.HTTPClientOptions{
 		DialerOptions: option.DialerOptions{
 			Detour: s.downloadDetour,
 		},
 		DisableEmptyDirectCheck: true,
 	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return transport, transport.CloseIdleConnections, nil
 }
