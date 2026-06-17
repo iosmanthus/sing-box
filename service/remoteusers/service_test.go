@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 )
@@ -140,5 +141,114 @@ func TestNewServiceRejectsMissingServers(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for missing servers")
+	}
+}
+
+func TestUpdateKeepsLastGoodOnTimeout(t *testing.T) {
+	var slow atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if slow.Load() {
+			time.Sleep(200 * time.Millisecond)
+		}
+		_, _ = w.Write([]byte(`{"users":[{"name":"alice","password":"cEFzcw=="}]}`))
+	}))
+	defer server.Close()
+
+	target := &fakeUpdater{}
+	s := newTestService(server.URL, "", target)
+	s.httpClient = server.Client()
+
+	if err := s.update(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if target.callCount != 1 {
+		t.Fatalf("expected one user applied initially, got callCount=%d", target.callCount)
+	}
+
+	slow.Store(true)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := s.update(ctx); err == nil {
+		t.Fatal("expected error when SOT response exceeds the context timeout")
+	}
+	if target.callCount != 1 {
+		t.Fatalf("UpdateUsers called %d times; must keep last-good on timeout", target.callCount)
+	}
+}
+
+func TestStartAppliesCacheBeforeFetch(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"users":[{"name":"fresh","password":"cEZyc2g="}]}`))
+	}))
+	defer server.Close()
+
+	cachePath := filepath.Join(t.TempDir(), "users.json")
+	if err := saveCache(cachePath, &cachedUsers{Users: []userEntry{{Name: "cached", Password: "cENhY2g="}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	target := &fakeUpdater{}
+	s := &Service{
+		ctx:            context.Background(),
+		logger:         log.StdLogger(),
+		url:            server.URL,
+		token:          "tok",
+		interval:       time.Minute,
+		requestTimeout: time.Second,
+		cachePath:      cachePath,
+		downloadDetour: "",
+		targets:        []userUpdater{target},
+	}
+
+	if err := s.Start(adapter.StartStateStart); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(target.history) < 2 {
+		t.Fatalf("expected at least two UpdateUsers calls (cache then fetch), got %d: %v", len(target.history), target.history)
+	}
+	if len(target.history[0]) != 1 || target.history[0][0] != "cached" {
+		t.Fatalf("first apply must be the cached set, got %v", target.history[0])
+	}
+	if len(target.history[1]) != 1 || target.history[1][0] != "fresh" {
+		t.Fatalf("second apply must be the fetched set, got %v", target.history[1])
+	}
+}
+
+func TestStartColdStartNonFatal(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	unreachableURL := server.URL
+	server.Close()
+
+	target := &fakeUpdater{}
+	s := &Service{
+		ctx:            context.Background(),
+		logger:         log.StdLogger(),
+		url:            unreachableURL,
+		token:          "tok",
+		interval:       time.Minute,
+		requestTimeout: 100 * time.Millisecond,
+		cachePath:      "",
+		downloadDetour: "",
+		targets:        []userUpdater{target},
+	}
+
+	if err := s.Start(adapter.StartStateStart); err != nil {
+		t.Fatalf("Start must be non-fatal on cold start, got error: %v", err)
+	}
+	defer func() {
+		if err := s.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	if target.callCount != 0 {
+		t.Fatalf("UpdateUsers must not be called with no cache and unreachable SOT, callCount=%d", target.callCount)
+	}
+	if s.currentCount != 0 {
+		t.Fatalf("currentCount = %d, want 0", s.currentCount)
 	}
 }

@@ -8,6 +8,7 @@ import (
 type fakeUpdater struct {
 	users     []string
 	uPSKs     []string
+	history   [][]string
 	callCount int
 	err       error
 }
@@ -18,6 +19,7 @@ func (f *fakeUpdater) UpdateUsers(users []string, uPSKs []string) error {
 	}
 	f.users = append([]string(nil), users...)
 	f.uPSKs = append([]string(nil), uPSKs...)
+	f.history = append(f.history, append([]string(nil), users...))
 	f.callCount++
 	return nil
 }
