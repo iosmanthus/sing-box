@@ -75,3 +75,30 @@ func TestFetchUsersSendsToken(t *testing.T) {
 		t.Fatalf("token not in request body: %s", gotBody)
 	}
 }
+
+func TestFetchUsersUsesPostMethod(t *testing.T) {
+	var gotMethod string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		_, _ = w.Write([]byte(`{"users":[]}`))
+	}))
+	defer server.Close()
+
+	if _, err := fetchUsers(context.Background(), server.Client(), server.URL, "tok", ""); err != nil {
+		t.Fatal(err)
+	}
+	if gotMethod != http.MethodPost {
+		t.Fatalf("expected POST, got %q", gotMethod)
+	}
+}
+
+func TestFetchUsersMalformedJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`not json`))
+	}))
+	defer server.Close()
+
+	if _, err := fetchUsers(context.Background(), server.Client(), server.URL, "tok", ""); err == nil {
+		t.Fatal("expected error on malformed JSON body")
+	}
+}
