@@ -88,7 +88,11 @@ func hashUsers(users []userEntry) [32]byte {
 	return out
 }
 
-// applyUsers pushes the full user set to every target via UpdateUsers.
+// applyUsers pushes the full user set to every target via UpdateUsers. It is
+// best-effort across multiple targets: a failure mid-list leaves earlier targets
+// already updated and returns the error without touching the rest. The caller
+// does not commit any state on error, so the next poll re-applies the full set
+// to every target and self-heals the partial update.
 func applyUsers(targets []userUpdater, users []userEntry) error {
 	names := make([]string, len(users))
 	passwords := make([]string, len(users))

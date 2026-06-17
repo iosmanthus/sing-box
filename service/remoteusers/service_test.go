@@ -121,8 +121,12 @@ func TestUpdateNoopWhenUnchanged(t *testing.T) {
 	s := newTestService(server.URL, "", target)
 	s.httpClient = server.Client()
 
-	_ = s.update(context.Background())
-	_ = s.update(context.Background())
+	if err := s.update(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.update(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	if target.callCount != 1 {
 		t.Fatalf("UpdateUsers called %d times; identical payload must be a no-op", target.callCount)
 	}
@@ -188,8 +192,10 @@ func TestStartAppliesCacheBeforeFetch(t *testing.T) {
 	}
 
 	target := &fakeUpdater{}
+	ctx, cancel := context.WithCancel(context.Background())
 	s := &Service{
-		ctx:            context.Background(),
+		ctx:            ctx,
+		cancel:         cancel,
 		logger:         log.StdLogger(),
 		url:            server.URL,
 		token:          "tok",
@@ -224,8 +230,10 @@ func TestStartColdStartNonFatal(t *testing.T) {
 	server.Close()
 
 	target := &fakeUpdater{}
+	ctx, cancel := context.WithCancel(context.Background())
 	s := &Service{
-		ctx:            context.Background(),
+		ctx:            ctx,
+		cancel:         cancel,
 		logger:         log.StdLogger(),
 		url:            unreachableURL,
 		token:          "tok",
@@ -250,5 +258,43 @@ func TestStartColdStartNonFatal(t *testing.T) {
 	}
 	if s.currentCount != 0 {
 		t.Fatalf("currentCount = %d, want 0", s.currentCount)
+	}
+}
+
+func TestCloseJoinsLoopGoroutine(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"users":[{"name":"alice","password":"cEFzcw=="}]}`))
+	}))
+	defer server.Close()
+
+	target := &fakeUpdater{}
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &Service{
+		ctx:            ctx,
+		cancel:         cancel,
+		logger:         log.StdLogger(),
+		url:            server.URL,
+		token:          "tok",
+		interval:       50 * time.Millisecond,
+		requestTimeout: time.Second,
+		cachePath:      "",
+		downloadDetour: "",
+		targets:        []userUpdater{target},
+	}
+
+	if err := s.Start(adapter.StartStateStart); err != nil {
+		t.Fatal(err)
+	}
+	// Let the ticker fire at least once.
+	time.Sleep(120 * time.Millisecond)
+
+	// Close must block until loopUpdate has returned (the done-channel join),
+	// then return nil.
+	if err := s.Close(); err != nil {
+		t.Fatalf("first Close returned error: %v", err)
+	}
+	// Idempotent: a second Close must not panic or hang.
+	if err := s.Close(); err != nil {
+		t.Fatalf("second Close returned error: %v", err)
 	}
 }
