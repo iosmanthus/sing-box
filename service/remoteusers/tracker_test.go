@@ -9,12 +9,13 @@ import (
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/log"
 
 	"golang.org/x/time/rate"
 )
 
 func TestTrackerCountsPerUser(t *testing.T) {
-	tr := newTracker(context.Background())
+	tr := newTracker(context.Background(), log.StdLogger())
 
 	alice, remote := net.Pipe()
 	tracked := tr.TrackConnection(alice, adapter.InboundContext{User: "alice"})
@@ -55,7 +56,7 @@ func TestTrackerCountsPerUser(t *testing.T) {
 }
 
 func TestSyncConvertsMbpsAndTreatsZeroAsUnlimited(t *testing.T) {
-	tr := newTracker(context.Background())
+	tr := newTracker(context.Background(), log.StdLogger())
 	tr.Sync([]userEntry{
 		{Name: "alice", UpMbps: 8, DownMbps: 80},
 		{Name: "bob"},
@@ -74,7 +75,7 @@ func TestSyncConvertsMbpsAndTreatsZeroAsUnlimited(t *testing.T) {
 }
 
 func TestSyncUpdatesLimiterInPlace(t *testing.T) {
-	tr := newTracker(context.Background())
+	tr := newTracker(context.Background(), log.StdLogger())
 	tr.Sync([]userEntry{{Name: "alice", DownMbps: 10}})
 	before := tr.state("alice").down.Load()
 
@@ -146,7 +147,7 @@ func TestWaitFuncIsNoOpWhenUnlimited(t *testing.T) {
 }
 
 func TestPruneKeepsLiveUsersOnly(t *testing.T) {
-	tr := newTracker(context.Background())
+	tr := newTracker(context.Background(), log.StdLogger())
 	tr.Sync([]userEntry{{Name: "alice"}, {Name: "bob"}})
 	tr.state("alice").uplink.Store(10)
 	tr.state("bob").uplink.Store(20)
@@ -160,7 +161,7 @@ func TestPruneKeepsLiveUsersOnly(t *testing.T) {
 }
 
 func TestRestoreContinuesTotals(t *testing.T) {
-	tr := newTracker(context.Background())
+	tr := newTracker(context.Background(), log.StdLogger())
 	tr.Restore([]usageEntry{{Name: "alice", UplinkBytes: 7, DownlinkBytes: 9, TCPSessions: 2}})
 
 	alice, remote := net.Pipe()
@@ -183,7 +184,7 @@ func TestRestoreContinuesTotals(t *testing.T) {
 }
 
 func TestAliasesShareOneBudget(t *testing.T) {
-	tr := newTracker(context.Background())
+	tr := newTracker(context.Background(), log.StdLogger())
 	// The SoT emits both entries during a uPSK overlap window.
 	tr.Sync([]userEntry{
 		{Name: "alice", DownMbps: 10},
@@ -213,7 +214,7 @@ func TestAliasesShareOneBudget(t *testing.T) {
 }
 
 func TestPruneKeepsPrincipalOfLiveAlias(t *testing.T) {
-	tr := newTracker(context.Background())
+	tr := newTracker(context.Background(), log.StdLogger())
 	tr.Sync([]userEntry{{Name: "alice"}})
 	tr.state("alice").uplink.Store(5)
 

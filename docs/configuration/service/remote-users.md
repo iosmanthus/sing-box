@@ -83,6 +83,45 @@ rotated-out credential alive during an overlap window emits it as a second entry
 limit, so a rotation neither splits a user's usage across two rows nor hands
 them double their bandwidth while it is in progress.
 
+### Per-site breakdown
+
+Each report also carries a `domains` object mapping a registrable domain to
+`[uplink, downlink]`:
+
+```json
+{"name": "alice", "uplink_bytes": 1, "downlink_bytes": 2,
+ "domains": {"googlevideo.com": [1000, 412000000], "other": [200, 3000]}}
+```
+
+Destinations are collapsed to their registrable domain, so the ~30 hostnames a
+single video session spreads across (`rr1---sn-….googlevideo.com` and friends)
+form one entry rather than thirty — otherwise the heaviest traffic would also be
+the most fragmented and would never stand out. Destinations dialled by IP share
+one `(ip)` bucket. At most 50 sites per user are reported, picked by bytes, and
+a user's table is capped at 200 sites in memory.
+
+`other` holds the sites that did not make the cut **plus** the bytes the
+per-site counters never saw: the totals are measured on the outer connection and
+so include multiplex framing and handshakes, while the sites are counted on the
+routed streams inside it. Folding the difference into `other` is what lets the
+sites add up to the user's total, which is how you tell whether the reported
+sites are 95% of their traffic or 20% of it.
+
+Unlike the totals, `domains` is a **snapshot** of this relay's counters rather
+than something the SoT accumulates. A period reset does not clear it, and losing
+a relay's cache restarts it. It is a diagnostic view, not an accounting record.
+
+Every routed connection is also logged with its user:
+
+```
+service/remote-users[relay]: [alice] chatgpt.com:443
+```
+
+The multiplex log line upstream of this carries the destination but not the
+user, and the user's own line carries only the multiplex session, so this is the
+one place with both. It is written before the outbound dials, so a line means
+the connection was attempted, not that it was established.
+
 !!! warning "Conflicts with ssm-api"
 
     An inbound holds exactly one tracker. Pointing both this service and an
