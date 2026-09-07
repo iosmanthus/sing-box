@@ -218,15 +218,26 @@ func (t *tracker) domainCounter(user string, site string) *domainCounter {
 func (d *domainState) restore(sites map[string][2]int64, total int64) {
 	d.access.Lock()
 	defer d.access.Unlock()
-	if len(sites) == 0 {
-		d.baseline = total
-		return
-	}
+	// "other" is derived at snapshot time, not measured. Restoring it would
+	// fold each restart's derived remainder back in as if it had been counted,
+	// compounding once per restart until it dwarfs every real site.
 	d.sites = make(map[string]*domainCounter, len(sites))
+	var measured int64
 	for site, v := range sites {
+		if site == otherDomain {
+			continue
+		}
 		c := new(domainCounter)
 		c.uplink.Store(v[0])
 		c.downlink.Store(v[1])
 		d.sites[site] = c
+		measured += v[0] + v[1]
+	}
+	// Whatever the restored sites do not account for is history: either from
+	// before this feature existed, or unattributed bytes already reported. It
+	// is not the new remainder's job to explain it again.
+	d.baseline = total - measured
+	if d.baseline < 0 {
+		d.baseline = 0
 	}
 }

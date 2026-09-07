@@ -228,10 +228,11 @@ func TestRestoreWithSitesContinuesCounting(t *testing.T) {
 	if got := usage[0].Domains["chatgpt.com"]; got != [2]int64{500, 600} {
 		t.Fatalf("restored sites should keep counting, got %v", got)
 	}
-	// Sites and totals both continued, so "other" is only what the site
-	// counters genuinely never saw: 3000 - 1100.
-	if got := usage[0].Domains[otherDomain]; got != [2]int64{0, 1900} {
-		t.Fatalf("other: %v", got)
+	// The restored sites accounted for 1000 of the 3000; the rest is history
+	// already reported, so the new remainder starts at zero and only the 100
+	// bytes transferred since are unexplained — and those went to a site.
+	if other, loaded := usage[0].Domains[otherDomain]; loaded {
+		t.Fatalf("history was re-explained as other: %v", other)
 	}
 }
 
@@ -245,5 +246,29 @@ func TestSnapshotToleratesTotalsBelowSites(t *testing.T) {
 	}
 	if got := sites["chatgpt.com"][0]; got != 5000 {
 		t.Fatalf("sites should be reported as measured, got %d", got)
+	}
+}
+
+func TestRestoreDropsTheDerivedOther(t *testing.T) {
+	tr := newTracker(context.Background(), log.StdLogger())
+	// A cache written before this fix: "other" was persisted as though it had
+	// been measured. Restoring it would compound once per restart.
+	tr.Restore([]usageEntry{{
+		Name:          "alice",
+		UplinkBytes:   0,
+		DownlinkBytes: 3_000_000,
+		Domains: map[string][2]int64{
+			"chatgpt.com": {0, 1000},
+			otherDomain:   {0, 2_900_000},
+		},
+	}})
+	transfer(t, tr, md("alice", "chatgpt.com"), 500)
+
+	usage := tr.Snapshot()
+	if got := usage[0].Domains["chatgpt.com"]; got != [2]int64{500, 1000} {
+		t.Fatalf("real sites should survive the restore, got %v", got)
+	}
+	if other, loaded := usage[0].Domains[otherDomain]; loaded {
+		t.Fatalf("the stale derived other came back: %v", other)
 	}
 }
