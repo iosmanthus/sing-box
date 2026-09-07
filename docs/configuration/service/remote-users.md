@@ -90,33 +90,25 @@ Each report also carries a `domains` object mapping a registrable domain to
 
 ```json
 {"name": "alice", "uplink_bytes": 1, "downlink_bytes": 2,
- "domains": {"googlevideo.com": [1000, 412000000], "other": [200, 3000]}}
+ "domains": {"googlevideo.com": [1000, 412000000], "chatgpt.com": [84, 204917]}}
 ```
 
 Destinations are collapsed to their registrable domain, so the ~30 hostnames a
 single video session spreads across (`rr1---sn-….googlevideo.com` and friends)
 form one entry rather than thirty — otherwise the heaviest traffic would also be
 the most fragmented and would never stand out. Destinations dialled by IP share
-one `(ip)` bucket. At most 50 sites per user are reported, picked by bytes, and
-a user's table is capped at 200 sites in memory.
+one `(ip)` bucket.
 
-`other` holds the sites that did not make the cut **plus** the bytes the
-per-site counters never saw: the totals are measured on the outer connection and
-so include multiplex framing and handshakes, while the sites are counted on the
-routed streams inside it. Folding the difference into `other` is what lets the
-sites add up to the user's total, which is how you tell whether the reported
-sites are 95% of their traffic or 20% of it.
+This is a **top-50 view of where the traffic went, not an exhaustive ledger**.
+The lightest sites past that are dropped, a user's table stops growing at 200
+sites, and the whole thing is deliberately not reconciled against the user's
+totals: those are measured on the outer connection and count multiplex framing
+the per-site counters never see. The totals are the accounting record; this is
+for finding out what a large number was made of.
 
-The site table is restored from `cache_path` alongside the totals, so both
-continue across a restart. When a relay upgrades into this feature its cache has
-totals but no site table; the totals it restores are recorded as a baseline and
-excluded from `other`, since bytes the site counters were never present for are
-not theirs to explain — charging them to `other` would bury every real site
-under the relay's entire history, permanently.
-
-Unlike the totals, `domains` is a **snapshot** of this relay's counters rather
-than something the SoT accumulates. A period reset does not clear it, and losing
-a relay's cache restarts it. It is a diagnostic view, not an accounting record.
+It is also a **snapshot** of this relay's counters rather than something the SoT
+accumulates. A period reset does not clear it, and losing a relay's cache
+restarts it.
 
 Every routed connection is also logged with its user:
 

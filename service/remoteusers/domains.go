@@ -20,16 +20,9 @@ var _ adapter.ConnectionTracker = (*tracker)(nil)
 const (
 	// maxDomainsPerUser bounds how many distinct sites one user may occupy.
 	// Measured on a live relay: ~130 sites across all users in 100 minutes, so
-	// this is headroom rather than a limit anyone should reach. Past it,
-	// everything folds into otherDomain and the accounting still adds up.
+	// this is headroom rather than a limit anyone should reach. Past it the
+	// bytes are not recorded: the totals are the ledger, this is a view.
 	maxDomainsPerUser = 200
-
-	// otherDomain collects the sites that did not make the report, plus the
-	// bytes the per-site counters never saw (mux framing, handshakes). It is
-	// what tells you whether the reported sites are 95% of a user's traffic or
-	// 20% of it — which is the difference between having found the cause and
-	// not.
-	otherDomain = "other"
 
 	// reportedDomains is how many sites per user are sent to the SoT. Sites are
 	// picked by bytes, so what gets dropped is the long tail of noise.
@@ -47,14 +40,6 @@ type domainCounter struct {
 type domainState struct {
 	access sync.Mutex
 	sites  map[string]*domainCounter
-	// baseline is the user's total at the moment this table started counting.
-	// The two do not always start together: a relay that upgrades into this
-	// feature restores its totals from cache with all of their history while
-	// the site table begins empty. Without the baseline, the reconciliation
-	// below would charge every pre-upgrade byte to "other" — permanently, since
-	// the totals keep that history — and the shares that make "other" useful
-	// would never converge.
-	baseline int64
 }
 
 // siteOf collapses a destination to its registrable domain, so that the ~30
@@ -96,23 +81,23 @@ func (d *domainState) counter(site string) *domainCounter {
 		return c
 	}
 	if len(d.sites) >= maxDomainsPerUser {
-		site = otherDomain
-		if c, loaded := d.sites[site]; loaded {
-			return c
-		}
+		// Past the cap the bytes are not recorded. This is a top-N view of
+		// where a user's traffic went, not an exhaustive ledger — the ledger is
+		// the totals, which are unaffected.
+		return nil
 	}
 	c := new(domainCounter)
 	d.sites[site] = c
 	return c
 }
 
-// snapshot returns the user's top sites by bytes plus an "other" entry holding
-// everything else. total is the user's overall byte count, which is measured on
-// the outer connection and so also covers what the per-site counters never see;
-// the difference lands in "other" so the parts add up to the whole.
-func (d *domainState) snapshot(total int64) map[string][2]int64 {
+// snapshot returns the user's heaviest sites, most bytes first. It is a view of
+// where the traffic went, deliberately not reconciled against the user's total:
+// the total is measured on the outer connection and counts multiplex framing
+// the sites never see, and making the two add up cost more in bugs than the
+// reconciliation was ever worth.
+func (d *domainState) snapshot() map[string][2]int64 {
 	d.access.Lock()
-	total -= d.baseline
 	type entry struct {
 		site     string
 		uplink   int64
@@ -120,21 +105,11 @@ func (d *domainState) snapshot(total int64) map[string][2]int64 {
 	}
 	entries := make([]entry, 0, len(d.sites))
 	for site, c := range d.sites {
-		if site == otherDomain {
-			continue
-		}
 		entries = append(entries, entry{site, c.uplink.Load(), c.downlink.Load()})
 	}
-	otherUplink, otherDownlink := int64(0), int64(0)
-	if c, loaded := d.sites[otherDomain]; loaded {
-		otherUplink, otherDownlink = c.uplink.Load(), c.downlink.Load()
-	}
 	d.access.Unlock()
-	if total < 0 {
-		total = 0
-	}
 
-	if len(entries) == 0 && otherUplink == 0 && otherDownlink == 0 && total == 0 {
+	if len(entries) == 0 {
 		return nil
 	}
 	sort.Slice(entries, func(i, j int) bool {
@@ -145,26 +120,12 @@ func (d *domainState) snapshot(total int64) map[string][2]int64 {
 		}
 		return entries[i].site < entries[j].site
 	})
-
-	out := make(map[string][2]int64, reportedDomains+1)
-	var reported int64
-	for i, e := range entries {
-		if i >= reportedDomains {
-			otherUplink += e.uplink
-			otherDownlink += e.downlink
-			continue
-		}
+	if len(entries) > reportedDomains {
+		entries = entries[:reportedDomains]
+	}
+	out := make(map[string][2]int64, len(entries))
+	for _, e := range entries {
 		out[e.site] = [2]int64{e.uplink, e.downlink}
-		reported += e.uplink + e.downlink
-	}
-	// Whatever the site counters never attributed — mux framing, handshakes,
-	// traffic that closed before routing — belongs in "other" too, otherwise
-	// the sites would silently fail to add up to the user's total.
-	if unattributed := total - reported - otherUplink - otherDownlink; unattributed > 0 {
-		otherDownlink += unattributed
-	}
-	if otherUplink > 0 || otherDownlink > 0 {
-		out[otherDomain] = [2]int64{otherUplink, otherDownlink}
 	}
 	return out
 }
@@ -184,6 +145,9 @@ func (t *tracker) RoutedConnection(ctx context.Context, conn net.Conn, metadata 
 	// logged before the dial, so a line here means "attempted", not "reached".
 	t.logger.InfoContext(ctx, "[", metadata.User, "] ", metadata.Destination)
 	c := t.domainCounter(metadata.User, siteOf(metadata))
+	if c == nil {
+		return conn
+	}
 	return bufio.NewCounterConn(conn,
 		[]N.CountFunc{addFunc(&c.uplink)},
 		[]N.CountFunc{addFunc(&c.downlink)},
@@ -196,6 +160,9 @@ func (t *tracker) RoutedPacketConnection(ctx context.Context, conn N.PacketConn,
 	}
 	t.logger.InfoContext(ctx, "[", metadata.User, "] ", metadata.Destination)
 	c := t.domainCounter(metadata.User, siteOf(metadata))
+	if c == nil {
+		return conn
+	}
 	return bufio.NewCounterPacketConn(conn,
 		[]N.CountFunc{addFunc(&c.uplink)},
 		[]N.CountFunc{addFunc(&c.downlink)},
@@ -212,32 +179,15 @@ func (t *tracker) domainCounter(user string, site string) *domainCounter {
 	return t.state(user).domains.counter(site)
 }
 
-// restore reloads a cached site table, or — when there is none to reload —
-// records where the user's totals already stood so that history the site
-// counters were never present for is not charged to "other".
-func (d *domainState) restore(sites map[string][2]int64, total int64) {
+// restore reloads a cached site table so the counts continue across a restart.
+func (d *domainState) restore(sites map[string][2]int64) {
 	d.access.Lock()
 	defer d.access.Unlock()
-	// "other" is derived at snapshot time, not measured. Restoring it would
-	// fold each restart's derived remainder back in as if it had been counted,
-	// compounding once per restart until it dwarfs every real site.
 	d.sites = make(map[string]*domainCounter, len(sites))
-	var measured int64
 	for site, v := range sites {
-		if site == otherDomain {
-			continue
-		}
 		c := new(domainCounter)
 		c.uplink.Store(v[0])
 		c.downlink.Store(v[1])
 		d.sites[site] = c
-		measured += v[0] + v[1]
-	}
-	// Whatever the restored sites do not account for is history: either from
-	// before this feature existed, or unattributed bytes already reported. It
-	// is not the new remainder's job to explain it again.
-	d.baseline = total - measured
-	if d.baseline < 0 {
-		d.baseline = 0
 	}
 }
