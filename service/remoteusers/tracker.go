@@ -223,7 +223,7 @@ func (t *tracker) Snapshot() []usageEntry {
 			DownlinkBytes: downlink,
 			TCPSessions:   st.tcpSessions.Load(),
 			UDPSessions:   st.udpSessions.Load(),
-			Domains:       st.domains.snapshot(uplink + downlink),
+			Domains:       st.domains.snapshot(),
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
@@ -239,6 +239,6 @@ func (t *tracker) Restore(usage []usageEntry) {
 		st.downlink.Store(u.DownlinkBytes)
 		st.tcpSessions.Store(u.TCPSessions)
 		st.udpSessions.Store(u.UDPSessions)
-		st.domains.restore(u.Domains, u.UplinkBytes+u.DownlinkBytes)
+		st.domains.restore(u.Domains)
 	}
 }
