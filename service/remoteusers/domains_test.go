@@ -195,3 +195,55 @@ func TestPruneDropsSitesWithTheUser(t *testing.T) {
 		t.Fatal("alice's sites were dropped along with bob's")
 	}
 }
+
+func TestRestoreWithoutSitesDoesNotChargeHistoryToOther(t *testing.T) {
+	tr := newTracker(context.Background(), log.StdLogger())
+	// A relay upgrading into this feature: its cache carries totals with all
+	// their history, but no site table.
+	tr.Restore([]usageEntry{{Name: "alice", UplinkBytes: 1_000_000, DownlinkBytes: 2_000_000}})
+	transfer(t, tr, md("alice", "chatgpt.com"), 400)
+
+	usage := tr.Snapshot()
+	if got := usage[0].Domains["chatgpt.com"][0]; got != 400 {
+		t.Fatalf("site bytes: %d", got)
+	}
+	// The 3 MB of history predates the site counters, so it is not theirs to
+	// explain. Charging it to "other" would bury every real site under it.
+	if other, loaded := usage[0].Domains[otherDomain]; loaded {
+		t.Fatalf("history was charged to other: %v", other)
+	}
+}
+
+func TestRestoreWithSitesContinuesCounting(t *testing.T) {
+	tr := newTracker(context.Background(), log.StdLogger())
+	tr.Restore([]usageEntry{{
+		Name:          "alice",
+		UplinkBytes:   1000,
+		DownlinkBytes: 2000,
+		Domains:       map[string][2]int64{"chatgpt.com": {400, 600}},
+	}})
+	transfer(t, tr, md("alice", "chatgpt.com"), 100)
+
+	usage := tr.Snapshot()
+	if got := usage[0].Domains["chatgpt.com"]; got != [2]int64{500, 600} {
+		t.Fatalf("restored sites should keep counting, got %v", got)
+	}
+	// Sites and totals both continued, so "other" is only what the site
+	// counters genuinely never saw: 3000 - 1100.
+	if got := usage[0].Domains[otherDomain]; got != [2]int64{0, 1900} {
+		t.Fatalf("other: %v", got)
+	}
+}
+
+func TestSnapshotToleratesTotalsBelowSites(t *testing.T) {
+	tr := newTracker(context.Background(), log.StdLogger())
+	transfer(t, tr, md("alice", "chatgpt.com"), 5000)
+	// A period reset zeroes the SoT's totals but not the relay's site table.
+	sites := tr.state("alice").domains.snapshot(10)
+	if _, loaded := sites[otherDomain]; loaded {
+		t.Fatal("a total below the site sum must not invent an other entry")
+	}
+	if got := sites["chatgpt.com"][0]; got != 5000 {
+		t.Fatalf("sites should be reported as measured, got %d", got)
+	}
+}

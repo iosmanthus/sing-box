@@ -47,6 +47,14 @@ type domainCounter struct {
 type domainState struct {
 	access sync.Mutex
 	sites  map[string]*domainCounter
+	// baseline is the user's total at the moment this table started counting.
+	// The two do not always start together: a relay that upgrades into this
+	// feature restores its totals from cache with all of their history while
+	// the site table begins empty. Without the baseline, the reconciliation
+	// below would charge every pre-upgrade byte to "other" — permanently, since
+	// the totals keep that history — and the shares that make "other" useful
+	// would never converge.
+	baseline int64
 }
 
 // siteOf collapses a destination to its registrable domain, so that the ~30
@@ -104,6 +112,7 @@ func (d *domainState) counter(site string) *domainCounter {
 // the difference lands in "other" so the parts add up to the whole.
 func (d *domainState) snapshot(total int64) map[string][2]int64 {
 	d.access.Lock()
+	total -= d.baseline
 	type entry struct {
 		site     string
 		uplink   int64
@@ -121,6 +130,9 @@ func (d *domainState) snapshot(total int64) map[string][2]int64 {
 		otherUplink, otherDownlink = c.uplink.Load(), c.downlink.Load()
 	}
 	d.access.Unlock()
+	if total < 0 {
+		total = 0
+	}
 
 	if len(entries) == 0 && otherUplink == 0 && otherDownlink == 0 && total == 0 {
 		return nil
@@ -198,4 +210,23 @@ func (t *tracker) RoutedFlow(ctx context.Context, metadata adapter.InboundContex
 
 func (t *tracker) domainCounter(user string, site string) *domainCounter {
 	return t.state(user).domains.counter(site)
+}
+
+// restore reloads a cached site table, or — when there is none to reload —
+// records where the user's totals already stood so that history the site
+// counters were never present for is not charged to "other".
+func (d *domainState) restore(sites map[string][2]int64, total int64) {
+	d.access.Lock()
+	defer d.access.Unlock()
+	if len(sites) == 0 {
+		d.baseline = total
+		return
+	}
+	d.sites = make(map[string]*domainCounter, len(sites))
+	for site, v := range sites {
+		c := new(domainCounter)
+		c.uplink.Store(v[0])
+		c.downlink.Store(v[1])
+		d.sites[site] = c
+	}
 }
