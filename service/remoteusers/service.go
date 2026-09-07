@@ -33,6 +33,11 @@ type Service struct {
 	cachePath      string
 	downloadDetour string
 	targets        []userUpdater
+	node           string
+	reportURL      string
+	tracker        *tracker
+	lastReported   []usageEntry
+	currentUsers   []userEntry
 	httpClient     *http.Client
 	closeTransport func()
 	ticker         *time.Ticker
@@ -69,6 +74,10 @@ func (s *Service) update(ctx context.Context) error {
 		return nil
 	}
 	if len(result.users) > 0 {
+		// Sync first: the tracker must know a user's limits before the inbound
+		// starts accepting their connections, otherwise there is a window in
+		// which they run unlimited.
+		s.tracker.Sync(result.users)
 		if err = applyUsers(s.targets, result.users); err != nil {
 			return err
 		}
@@ -78,11 +87,48 @@ func (s *Service) update(ctx context.Context) error {
 		s.lastEtag = result.etag
 	}
 	s.currentCount = len(result.users)
-	if err = saveCache(s.cachePath, &cachedUsers{Users: result.users, Etag: result.etag, LastUpdated: time.Now()}); err != nil {
+	s.currentUsers = result.users
+	if err = s.persist(result.users, result.etag); err != nil {
 		s.logger.Error(E.Cause(err, "save user cache"))
 	}
 	s.logger.Info("updated to ", s.currentCount, " users")
 	return nil
+}
+
+// persist writes the user list, the etag and the running traffic totals to the
+// on-disk cache. The totals make the cache load-bearing for billing, so it is
+// rewritten on every report tick and not only when the user list changes.
+func (s *Service) persist(users []userEntry, etag string) error {
+	return saveCache(s.cachePath, &cachedUsers{
+		Users:       users,
+		Etag:        etag,
+		LastUpdated: time.Now(),
+		Usage:       s.tracker.Snapshot(),
+	})
+}
+
+// report sends this node's running totals to the SoT. It is a no-op while no
+// counter has moved, so an idle node stops writing. Counters are pruned only
+// after the SoT has acknowledged the report, so a user removed from the SoT
+// still gets their final bytes accounted for.
+func (s *Service) report(ctx context.Context) error {
+	s.access.Lock()
+	defer s.access.Unlock()
+
+	usage := s.tracker.Snapshot()
+	if len(usage) == 0 || !usageChanged(s.lastReported, usage) {
+		return nil
+	}
+	if err := postUsage(ctx, s.httpClient, s.reportURL, s.token, s.node, usage); err != nil {
+		return err
+	}
+	s.lastReported = usage
+	names := make([]string, len(s.currentUsers))
+	for i, u := range s.currentUsers {
+		names[i] = u.Name
+	}
+	s.tracker.Prune(names)
+	return s.persist(s.currentUsers, s.lastEtag)
 }
 
 func RegisterService(registry *boxService.Registry) {
@@ -100,7 +146,10 @@ func NewService(ctx context.Context, logger log.ContextLogger, tag string, optio
 	if inboundManager == nil {
 		return nil, E.New("inbound manager not available")
 	}
-	var targets []userUpdater
+	var (
+		targets  []userUpdater
+		managers []adapter.ManagedSSMServer
+	)
 	for i, entry := range options.Servers.Entries() {
 		inbound, loaded := inboundManager.Get(entry.Value)
 		if !loaded {
@@ -111,6 +160,7 @@ func NewService(ctx context.Context, logger log.ContextLogger, tag string, optio
 			return nil, E.New("remote_users server[", i, "]: inbound/", inbound.Type(), "[", inbound.Tag(), "] is not a managed (SSM) server")
 		}
 		targets = append(targets, managed)
+		managers = append(managers, managed)
 	}
 	interval := defaultInterval
 	if options.Interval > 0 {
@@ -121,6 +171,17 @@ func NewService(ctx context.Context, logger log.ContextLogger, tag string, optio
 		requestTimeout = time.Duration(options.RequestTimeout)
 	}
 	serviceCtx, cancel := context.WithCancel(ctx)
+	// One tracker shared by every target inbound, so a user's counters are
+	// their total across inbounds. SetTracker has a single slot per inbound:
+	// an ssm-api service on the same inbound would silently displace this one.
+	t := newTracker(serviceCtx)
+	for _, managed := range managers {
+		managed.SetTracker(t)
+	}
+	node := options.Node
+	if node == "" {
+		node = tag
+	}
 	return &Service{
 		Adapter:        boxService.NewAdapter(C.TypeRemoteUsers, tag),
 		ctx:            serviceCtx,
@@ -133,6 +194,9 @@ func NewService(ctx context.Context, logger log.ContextLogger, tag string, optio
 		cachePath:      options.CachePath,
 		downloadDetour: options.DownloadDetour,
 		targets:        targets,
+		node:           node,
+		reportURL:      reportURL(options.URL),
+		tracker:        t,
 	}, nil
 }
 
@@ -149,15 +213,25 @@ func (s *Service) Start(stage adapter.StartStage) error {
 
 	// Floor: apply the on-disk last-good cache before the first fetch, so the
 	// node comes up with users even while the SOT is unreachable.
-	if cache, cacheErr := loadCache(s.cachePath); cacheErr != nil {
+	cache, cacheErr := loadCache(s.cachePath)
+	if cacheErr != nil {
 		s.logger.Error(E.Cause(cacheErr, "load user cache"))
-	} else if cache != nil && len(cache.Users) > 0 {
+	}
+	if cache != nil && len(cache.Usage) > 0 {
+		// Continue the running totals rather than restarting at zero, so the
+		// SoT never has to treat a restart as a counter reset.
+		s.tracker.Restore(cache.Usage)
+		s.lastReported = cache.Usage
+	}
+	if cache != nil && len(cache.Users) > 0 {
+		s.tracker.Sync(cache.Users)
 		if applyErr := applyUsers(s.targets, cache.Users); applyErr != nil {
 			s.logger.Error(E.Cause(applyErr, "apply cached users"))
 		} else {
 			s.lastHash = hashUsers(cache.Users)
 			s.lastEtag = cache.Etag
 			s.currentCount = len(cache.Users)
+			s.currentUsers = cache.Users
 			s.logger.Info("loaded ", s.currentCount, " users from cache")
 		}
 	}
@@ -186,6 +260,15 @@ func (s *Service) Close() error {
 	if s.done != nil {
 		<-s.done
 	}
+	// Flush the last interval's counters. The report itself is skipped: the
+	// context is already cancelled, and the totals survive in the cache.
+	if s.tracker != nil {
+		s.access.Lock()
+		if err := s.persist(s.currentUsers, s.lastEtag); err != nil {
+			s.logger.Error(E.Cause(err, "save usage cache"))
+		}
+		s.access.Unlock()
+	}
 	if s.closeTransport != nil {
 		s.closeTransport()
 		s.closeTransport = nil
@@ -205,6 +288,12 @@ func (s *Service) loopUpdate() {
 			cancel()
 			if err != nil {
 				s.logger.Error(E.Cause(err, "update users (keeping previous set)"))
+			}
+			reportCtx, reportCancel := context.WithTimeout(s.ctx, s.requestTimeout)
+			err = s.report(reportCtx)
+			reportCancel()
+			if err != nil {
+				s.logger.Error(E.Cause(err, "report usage (retrying next tick)"))
 			}
 		}
 	}

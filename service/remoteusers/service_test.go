@@ -19,6 +19,9 @@ import (
 func newTestService(url, cachePath string, target userUpdater) *Service {
 	return &Service{
 		ctx:            context.Background(),
+		tracker:        newTracker(context.Background()),
+		node:           "test-node",
+		reportURL:      reportURL(url),
 		logger:         log.StdLogger(),
 		url:            url,
 		token:          "tok",
@@ -196,6 +199,8 @@ func TestStartAppliesCacheBeforeFetch(t *testing.T) {
 	s := &Service{
 		ctx:            ctx,
 		cancel:         cancel,
+		tracker:        newTracker(ctx),
+		node:           "test-node",
 		logger:         log.StdLogger(),
 		url:            server.URL,
 		token:          "tok",
@@ -234,6 +239,8 @@ func TestStartColdStartNonFatal(t *testing.T) {
 	s := &Service{
 		ctx:            ctx,
 		cancel:         cancel,
+		tracker:        newTracker(ctx),
+		node:           "test-node",
 		logger:         log.StdLogger(),
 		url:            unreachableURL,
 		token:          "tok",
@@ -272,6 +279,8 @@ func TestCloseJoinsLoopGoroutine(t *testing.T) {
 	s := &Service{
 		ctx:            ctx,
 		cancel:         cancel,
+		tracker:        newTracker(ctx),
+		node:           "test-node",
 		logger:         log.StdLogger(),
 		url:            server.URL,
 		token:          "tok",

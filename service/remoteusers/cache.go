@@ -10,6 +10,9 @@ type cachedUsers struct {
 	Users       []userEntry `json:"users"`
 	Etag        string      `json:"etag,omitempty"`
 	LastUpdated time.Time   `json:"last_updated"`
+	// Usage carries the running traffic totals across restarts. Without it the
+	// counters would restart at zero and the SoT would see them go backwards.
+	Usage []usageEntry `json:"usage,omitempty"`
 }
 
 // loadCache reads the cached user list. A missing file or empty path returns

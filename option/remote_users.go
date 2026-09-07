@@ -12,5 +12,6 @@ type RemoteUsersServiceOptions struct {
 	RequestTimeout badoption.Duration                `json:"request_timeout,omitempty"`
 	CachePath      string                            `json:"cache_path,omitempty"`
 	DownloadDetour string                            `json:"download_detour,omitempty"`
+	Node           string                            `json:"node,omitempty"`
 	Servers        *badjson.TypedMap[string, string] `json:"servers"`
 }
