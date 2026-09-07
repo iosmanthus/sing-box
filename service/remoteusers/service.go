@@ -174,9 +174,20 @@ func NewService(ctx context.Context, logger log.ContextLogger, tag string, optio
 	// One tracker shared by every target inbound, so a user's counters are
 	// their total across inbounds. SetTracker has a single slot per inbound:
 	// an ssm-api service on the same inbound would silently displace this one.
-	t := newTracker(serviceCtx)
+	t := newTracker(serviceCtx, logger)
 	for _, managed := range managers {
 		managed.SetTracker(t)
+	}
+	// The inbound tracker above sees the outer connection, which with multiplex
+	// enabled is one session carrying many streams to many destinations. The
+	// router-level tracker sees those streams individually, with the user still
+	// attached, which is what makes the per-site breakdown and the per-user
+	// connection log possible. AppendTracker is a list, so this coexists with
+	// clash-api and the v2ray stats service.
+	if router := service.FromContext[adapter.Router](ctx); router != nil {
+		router.AppendTracker(t)
+	} else {
+		logger.Warn("router not available; per-site usage and connection logging are disabled")
 	}
 	node := options.Node
 	if node == "" {

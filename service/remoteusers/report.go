@@ -19,6 +19,11 @@ type usageEntry struct {
 	DownlinkBytes int64  `json:"downlink_bytes"`
 	TCPSessions   int64  `json:"tcp_sessions"`
 	UDPSessions   int64  `json:"udp_sessions"`
+	// Domains maps a registrable domain to [uplink, downlink]. Unlike the
+	// totals above it is a snapshot of this relay's counters rather than
+	// something the SoT accumulates, so it is diagnostic only: a period reset
+	// does not clear it.
+	Domains map[string][2]int64 `json:"domains,omitempty"`
 }
 
 type usageReport struct {
@@ -72,7 +77,14 @@ func usageChanged(previous, current []usageEntry) bool {
 		last[u.Name] = u
 	}
 	for _, u := range current {
-		if last[u.Name] != u {
+		// Only the totals decide whether anything moved: the per-site table is
+		// derived from them, so it cannot change on its own.
+		p := last[u.Name]
+		if p.Name != u.Name ||
+			p.UplinkBytes != u.UplinkBytes ||
+			p.DownlinkBytes != u.DownlinkBytes ||
+			p.TCPSessions != u.TCPSessions ||
+			p.UDPSessions != u.UDPSessions {
 			return true
 		}
 	}

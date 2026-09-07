@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing/common/bufio"
 	N "github.com/sagernet/sing/common/network"
 
@@ -43,6 +44,9 @@ type userState struct {
 
 	up   atomic.Pointer[rate.Limiter]
 	down atomic.Pointer[rate.Limiter]
+
+	// domains is the per-site breakdown behind the totals above. See domains.go.
+	domains domainState
 }
 
 // setLimit installs, updates or removes one direction's limiter.
@@ -110,6 +114,7 @@ func addFunc(counter *atomic.Int64) N.CountFunc {
 // user's counters are their total across inbounds.
 type tracker struct {
 	ctx    context.Context
+	logger log.ContextLogger
 	access sync.RWMutex
 	users  map[string]*userState
 }
@@ -128,10 +133,11 @@ func accountOf(user string) string {
 	return user
 }
 
-func newTracker(ctx context.Context) *tracker {
+func newTracker(ctx context.Context, logger log.ContextLogger) *tracker {
 	return &tracker{
-		ctx:   ctx,
-		users: make(map[string]*userState),
+		ctx:    ctx,
+		logger: logger,
+		users:  make(map[string]*userState),
 	}
 }
 
@@ -210,12 +216,14 @@ func (t *tracker) Snapshot() []usageEntry {
 	defer t.access.RUnlock()
 	out := make([]usageEntry, 0, len(t.users))
 	for name, st := range t.users {
+		uplink, downlink := st.uplink.Load(), st.downlink.Load()
 		out = append(out, usageEntry{
 			Name:          name,
-			UplinkBytes:   st.uplink.Load(),
-			DownlinkBytes: st.downlink.Load(),
+			UplinkBytes:   uplink,
+			DownlinkBytes: downlink,
 			TCPSessions:   st.tcpSessions.Load(),
 			UDPSessions:   st.udpSessions.Load(),
+			Domains:       st.domains.snapshot(uplink + downlink),
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
