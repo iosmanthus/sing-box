@@ -107,6 +107,13 @@ routed streams inside it. Folding the difference into `other` is what lets the
 sites add up to the user's total, which is how you tell whether the reported
 sites are 95% of their traffic or 20% of it.
 
+The site table is restored from `cache_path` alongside the totals, so both
+continue across a restart. When a relay upgrades into this feature its cache has
+totals but no site table; the totals it restores are recorded as a baseline and
+excluded from `other`, since bytes the site counters were never present for are
+not theirs to explain — charging them to `other` would bury every real site
+under the relay's entire history, permanently.
+
 Unlike the totals, `domains` is a **snapshot** of this relay's counters rather
 than something the SoT accumulates. A period reset does not clear it, and losing
 a relay's cache restarts it. It is a diagnostic view, not an accounting record.
