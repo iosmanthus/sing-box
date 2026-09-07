@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"sort"
@@ -21,6 +22,10 @@ type userUpdater interface {
 type userEntry struct {
 	Name     string `json:"name"`
 	Password string `json:"password"`
+	// Per-user rate limits in SI megabits per second. Zero or absent means
+	// unlimited; the SoT rejects an explicit 0 so the two cannot be confused.
+	UpMbps   int `json:"up_mbps,omitempty"`
+	DownMbps int `json:"down_mbps,omitempty"`
 }
 
 type usersResponse struct {
@@ -68,6 +73,14 @@ func fetchUsers(ctx context.Context, client *http.Client, url, token, etag strin
 	if err = json.Unmarshal(content, &parsed); err != nil {
 		return fetchResult{}, E.Cause(err, "parse user list")
 	}
+	// An unnamed user cannot be accounted for: MultiInbound only sets
+	// metadata.User when the name is non-empty, so its traffic would land in
+	// the "" bucket and be billed to nobody.
+	for i, u := range parsed.Users {
+		if u.Name == "" {
+			return fetchResult{}, E.New("user[", i, "]: empty name")
+		}
+	}
 	return fetchResult{users: parsed.Users, etag: response.Header.Get("Etag")}, nil
 }
 
@@ -81,6 +94,8 @@ func hashUsers(users []userEntry) [32]byte {
 		h.Write([]byte(u.Name))
 		h.Write([]byte{0})
 		h.Write([]byte(u.Password))
+		h.Write([]byte{0})
+		fmt.Fprintf(h, "%d:%d", u.UpMbps, u.DownMbps)
 		h.Write([]byte{0})
 	}
 	var out [32]byte
